@@ -29,7 +29,7 @@ def process_crawl(
     client: VPS789Client,
     crawl_type: str,
     output_path: str,
-    suffix: str = "vps789",
+    prefix: str = "vps789-",
     dry_run: bool = False
 ) -> int:
     """
@@ -38,7 +38,7 @@ def process_crawl(
     :param client: API 客户端
     :param crawl_type: 采集类型 "domain" 或 "ip"
     :param output_path: 输出文件完整路径
-    :param suffix: 备注后缀
+    :param prefix: 备注前缀，默认为 "vps789-"
     :param dry_run: 是否为试运行模式（不写磁盘）
     :return: 抓取并格式化的有效行数
     """
@@ -50,7 +50,7 @@ def process_crawl(
         logger.warning(f"未能获取到 [{crawl_type}] 任何数据，任务终止")
         return 0
 
-    formatted_text = format_node_list(raw_items, suffix=suffix, deduplicate=True)
+    formatted_text = format_node_list(raw_items, prefix=prefix, deduplicate=True)
     lines_count = len(formatted_text.splitlines()) if formatted_text else 0
 
     logger.info(f"清洗与格式化完成: 原始 {len(raw_items)} 条 -> 格式化有效 {lines_count} 条")
@@ -100,9 +100,9 @@ def main(argv: List[str] = None) -> int:
         help="优选 IP 输出文件名，默认为 vps789-bestip"
     )
     parser.add_argument(
-        "--suffix",
-        default="vps789",
-        help="节点备注后缀，默认为 vps789"
+        "--prefix",
+        default="vps789-",
+        help="节点备注前缀（插入在 # 与备注之间），默认为 vps789-"
     )
     parser.add_argument(
         "--dry-run",
@@ -129,7 +129,7 @@ def main(argv: List[str] = None) -> int:
                 client=client,
                 crawl_type="domain",
                 output_path=domains_path,
-                suffix=args.suffix,
+                prefix=args.prefix,
                 dry_run=args.dry_run
             )
 
@@ -139,7 +139,7 @@ def main(argv: List[str] = None) -> int:
                 client=client,
                 crawl_type="ip",
                 output_path=bestip_path,
-                suffix=args.suffix,
+                prefix=args.prefix,
                 dry_run=args.dry_run
             )
 

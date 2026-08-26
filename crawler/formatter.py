@@ -38,9 +38,9 @@ def is_valid_ip(host: str) -> bool:
         return False
 
 
-def format_single_node(item: Dict[str, Any], suffix: str = "vps789") -> Optional[str]:
+def format_single_node(item: Dict[str, Any], prefix: str = "vps789-") -> Optional[str]:
     """
-    格式化单条 VPS789 节点数据为: CF优选IP[:端口]#备注-后缀
+    格式化单条 VPS789 节点数据为: CF优选IP[:端口]#前缀备注 (例如: cdn.com#vps789-备注 或 1.1.1.1:443#vps789-1.1.1.1)
 
     规则:
     1. CF优选IP取自 item['ip']。
@@ -49,10 +49,10 @@ def format_single_node(item: Dict[str, Any], suffix: str = "vps789") -> Optional
        - 若端口为 443，则 :端口 省略（例如 cdn.example.com）。
        - 若端口不为 443，则 :端口 保留（例如 cdn.example.com:8443）。
     4. 备注取自 item['providerUrl']，若为空或纯空白，则复用 CF优选IP 的内容。
-    5. 后缀默认为 vps789。
+    5. 前缀默认为 "vps789-"，插入在 # 与备注内容之间。
 
     :param item: 节点原始字典数据
-    :param suffix: 备注后缀，默认为 "vps789"
+    :param prefix: 备注前缀，默认为 "vps789-"
     :return: 格式化后的字符串行，若数据不合法则返回 None
     """
     raw_ip = str(item.get("ip", "")).strip()
@@ -91,17 +91,24 @@ def format_single_node(item: Dict[str, Any], suffix: str = "vps789") -> Optional
         # 备注为空时，复用域名/IP列内容
         clean_remarks = raw_ip
 
-    clean_suffix = suffix.strip() if suffix else "vps789"
-    formatted_line = f"{host_port_str}#{clean_remarks}-{clean_suffix}"
+    # 处理前缀（确保前缀格式为 "vps789-"）
+    if prefix:
+        clean_prefix = prefix.strip()
+        if not clean_prefix.endswith("-"):
+            clean_prefix = f"{clean_prefix}-"
+    else:
+        clean_prefix = ""
+
+    formatted_line = f"{host_port_str}#{clean_prefix}{clean_remarks}"
     return formatted_line
 
 
-def format_node_list(items: List[Dict[str, Any]], suffix: str = "vps789", deduplicate: bool = True) -> str:
+def format_node_list(items: List[Dict[str, Any]], prefix: str = "vps789-", deduplicate: bool = True) -> str:
     """
     批量格式化节点列表为多行文本。
 
     :param items: 原始节点列表
-    :param suffix: 节点后缀
+    :param prefix: 节点备注前缀，默认 "vps789-"
     :param deduplicate: 是否对生成的行进行去重，默认 True 保留首个出现的记录
     :return: 换行符连接的格式化文本
     """
@@ -109,7 +116,7 @@ def format_node_list(items: List[Dict[str, Any]], suffix: str = "vps789", dedupl
     seen = set()
 
     for item in items:
-        line = format_single_node(item, suffix=suffix)
+        line = format_single_node(item, prefix=prefix)
         if not line:
             continue
         if deduplicate:

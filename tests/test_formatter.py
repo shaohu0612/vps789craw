@@ -1,6 +1,6 @@
 """
 节点格式化引擎单元测试
-全面覆盖域名、IP、端口省略/保留、备注填充、去重等业务规则。
+全面覆盖域名、IP、端口省略/保留、前缀备注填充、去重等业务规则。
 """
 
 import pytest
@@ -25,7 +25,7 @@ def test_is_valid_ip():
 
 def test_format_domain_with_port_443_and_remarks():
     """
-    测试正常域名、端口 443、有备注的情况 -> :443 省略
+    测试正常域名、端口 443、有备注的情况 -> :443 省略，前缀为 vps789-
     """
     item = {
         "ip": "dnew.cc",
@@ -33,7 +33,7 @@ def test_format_domain_with_port_443_and_remarks():
         "providerUrl": "yong"
     }
     result = format_single_node(item)
-    assert result == "dnew.cc#yong-vps789"
+    assert result == "dnew.cc#vps789-yong"
 
 
 def test_format_domain_with_port_443_and_empty_remarks():
@@ -46,7 +46,7 @@ def test_format_domain_with_port_443_and_empty_remarks():
         "providerUrl": None
     }
     result = format_single_node(item)
-    assert result == "www.shopify.com#www.shopify.com-vps789"
+    assert result == "www.shopify.com#vps789-www.shopify.com"
 
 
 def test_format_domain_with_non_443_port():
@@ -59,12 +59,12 @@ def test_format_domain_with_non_443_port():
         "providerUrl": "官方测速"
     }
     result = format_single_node(item)
-    assert result == "speed.cloudflare.com:8443#官方测速-vps789"
+    assert result == "speed.cloudflare.com:8443#vps789-官方测速"
 
 
 def test_format_ipv4_with_port_443():
     """
-    测试 IPv4 地址、端口 443 -> :443 绝不可省略
+    测试 IPv4 地址、端口 443 -> :443 绝不可省略，前缀为 vps789-
     """
     item = {
         "ip": "104.21.20.210",
@@ -72,7 +72,7 @@ def test_format_ipv4_with_port_443():
         "providerUrl": None
     }
     result = format_single_node(item)
-    assert result == "104.21.20.210:443#104.21.20.210-vps789"
+    assert result == "104.21.20.210:443#vps789-104.21.20.210"
 
 
 def test_format_ipv4_with_non_443_port_and_remarks():
@@ -85,7 +85,7 @@ def test_format_ipv4_with_non_443_port_and_remarks():
         "providerUrl": "高防节点"
     }
     result = format_single_node(item)
-    assert result == "172.67.212.221:2053#高防节点-vps789"
+    assert result == "172.67.212.221:2053#vps789-高防节点"
 
 
 def test_format_ipv6_node():
@@ -98,7 +98,7 @@ def test_format_ipv6_node():
         "providerUrl": ""
     }
     result = format_single_node(item)
-    assert result == "2606:4700:3037::ac43:d4dd:443#2606:4700:3037::ac43:d4dd-vps789"
+    assert result == "2606:4700:3037::ac43:d4dd:443#vps789-2606:4700:3037::ac43:d4dd"
 
 
 def test_format_node_list_and_deduplication():
@@ -114,6 +114,6 @@ def test_format_node_list_and_deduplication():
     formatted = format_node_list(items, deduplicate=True)
     lines = formatted.splitlines()
     assert len(lines) == 3
-    assert lines[0] == "www.shopify.com#www.shopify.com-vps789"
-    assert lines[1] == "dnew.cc#yong-vps789"
-    assert lines[2] == "104.21.20.210:443#104.21.20.210-vps789"
+    assert lines[0] == "www.shopify.com#vps789-www.shopify.com"
+    assert lines[1] == "dnew.cc#vps789-yong"
+    assert lines[2] == "104.21.20.210:443#vps789-104.21.20.210"
