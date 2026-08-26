@@ -56,13 +56,26 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           
+          TOTAL_LINES=$(wc -l < vps789-bestip || echo 0)
+          echo "### 📊 VPS789 优选 IP 采集报告" >> $GITHUB_STEP_SUMMARY
+          echo "- **采集时间**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "- **有效节点总数**: ${TOTAL_LINES} 条" >> $GITHUB_STEP_SUMMARY
+          
           if [ -n "$(git status --porcelain vps789-bestip)" ]; then
             echo "检测到 vps789-bestip 产生更新，准备提交变更..."
             git add vps789-bestip
             git commit -m "chore(ip): 定时更新 vps789-bestip 优选 IP 列表 [skip ci]"
             git pull --rebase origin main || true
             git push origin main || git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:main
+            echo "✅ **更新状态**: 数据有变化，已自动提交并推送到 main 分支。" >> $GITHUB_STEP_SUMMARY
             echo "优选 IP 列表更新并推送成功！"
           else
+            echo "ℹ️ **更新状态**: 远程节点数据与仓库一致，无需产生重复空提交。" >> $GITHUB_STEP_SUMMARY
             echo "vps789-bestip 无内容变化，跳过提交。"
           fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### 🔍 前 5 条数据预览:" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          head -n 5 vps789-bestip >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
