@@ -1,0 +1,62 @@
+name: VPS789 Crawl Best IP
+
+on:
+  schedule:
+    # 默认每 6 小时 30 分运行一次 (与域名采集错峰运行)
+    - cron: '30 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      enabled:
+        description: '是否启用并执行优选 IP 采集任务'
+        required: true
+        type: boolean
+        default: true
+
+# 授予写入仓库内容的权限
+permissions:
+  contents: write
+
+jobs:
+  crawl-and-update-bestip:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.enabled }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出仓库代码
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: 配置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 执行优选 IP 采集
+        run: |
+          python -m crawler.main --type ip --bestip-file vps789-bestip
+
+      - name: 检查并提交变更
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          
+          if [ -n "$(git status --porcelain vps789-bestip)" ]; then
+            echo "检测到 vps789-bestip 产生更新，准备提交变更..."
+            git add vps789-bestip
+            git commit -m "chore(ip): 定时更新 vps789-bestip 优选 IP 列表"
+            git pull --rebase origin main || true
+            git push origin main
+            echo "优选 IP 列表更新并推送成功！"
+          else
+            echo "vps789-bestip 无内容变化，跳过提交。"
+          fi
