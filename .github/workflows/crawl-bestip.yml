@@ -12,6 +12,10 @@ on:
         type: boolean
         default: true
 
+# 全局环境变量：消除 Node 20 弃用与强制 Node 24 的运行警告
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE20: "true"
+
 # 授予写入仓库内容的权限
 permissions:
   contents: write
@@ -20,12 +24,14 @@ jobs:
   crawl-and-update-bestip:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.enabled }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: 检出仓库代码
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_PAT || github.token }}
           fetch-depth: 0
 
       - name: 配置 Python 环境
@@ -45,7 +51,7 @@ jobs:
 
       - name: 检查并提交变更
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           git config --local user.name "github-actions[bot]"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
@@ -53,9 +59,9 @@ jobs:
           if [ -n "$(git status --porcelain vps789-bestip)" ]; then
             echo "检测到 vps789-bestip 产生更新，准备提交变更..."
             git add vps789-bestip
-            git commit -m "chore(ip): 定时更新 vps789-bestip 优选 IP 列表"
+            git commit -m "chore(ip): 定时更新 vps789-bestip 优选 IP 列表 [skip ci]"
             git pull --rebase origin main || true
-            git push origin main
+            git push origin main || git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:main
             echo "优选 IP 列表更新并推送成功！"
           else
             echo "vps789-bestip 无内容变化，跳过提交。"
