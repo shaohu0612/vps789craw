@@ -12,9 +12,9 @@ on:
         type: boolean
         default: true
 
-# 全局环境变量：消除 Node 20 弃用与强制 Node 24 的运行警告
+# 全局环境变量：显式指定在 Node.js 24 下运行 JavaScript Actions，消除 Node 20 弃用警告
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE20: "true"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 # 授予写入仓库内容的权限
 permissions:
