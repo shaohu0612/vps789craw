@@ -7,7 +7,7 @@ import argparse
 import logging
 import os
 import sys
-from typing import List
+from typing import List, Optional
 
 from crawler.client import VPS789Client
 from crawler.formatter import format_node_list
@@ -30,6 +30,8 @@ def process_crawl(
     crawl_type: str,
     output_path: str,
     prefix: str = "vps789-",
+    max_latency: Optional[float] = None,
+    max_loss_rate: Optional[float] = None,
     dry_run: bool = False
 ) -> int:
     """
@@ -39,21 +41,30 @@ def process_crawl(
     :param crawl_type: 采集类型 "domain" 或 "ip"
     :param output_path: 输出文件完整路径
     :param prefix: 备注前缀，默认为 "vps789-"
+    :param max_latency: 最大允许三网平均延迟 (ms)，None 表示不限制
+    :param max_loss_rate: 最大允许三网平均丢包率 (%)，None 表示不限制
     :param dry_run: 是否为试运行模式（不写磁盘）
     :return: 抓取并格式化的有效行数
     """
     logger = logging.getLogger(__name__)
-    logger.info(f"===> 开始处理采集任务: 类型=[{crawl_type}] -> 输出目标=[{output_path}]")
+    filter_info = f" (质量过滤: 延迟<={max_latency}ms, 丢包率<={max_loss_rate}%)" if (max_latency is not None or max_loss_rate is not None) else ""
+    logger.info(f"===> 开始处理采集任务: 类型=[{crawl_type}]{filter_info} -> 输出目标=[{output_path}]")
 
     raw_items = client.fetch_all(remarks_type=crawl_type)
     if not raw_items:
         logger.warning(f"未能获取到 [{crawl_type}] 任何数据，任务终止")
         return 0
 
-    formatted_text = format_node_list(raw_items, prefix=prefix, deduplicate=True)
+    formatted_text = format_node_list(
+        raw_items,
+        prefix=prefix,
+        deduplicate=True,
+        max_latency=max_latency,
+        max_loss_rate=max_loss_rate
+    )
     lines_count = len(formatted_text.splitlines()) if formatted_text else 0
 
-    logger.info(f"清洗与格式化完成: 原始 {len(raw_items)} 条 -> 格式化有效 {lines_count} 条")
+    logger.info(f"清洗与格式化完成: 原始 {len(raw_items)} 条 -> 过滤与去重后有效 {lines_count} 条")
 
     if dry_run:
         logger.info("[试运行模式] 不写入文件，前 10 行预览:")
@@ -105,6 +116,23 @@ def main(argv: List[str] = None) -> int:
         help="节点备注前缀（插入在 # 与备注之间），默认为 vps789-"
     )
     parser.add_argument(
+        "--max-latency",
+        type=float,
+        default=300.0,
+        help="三网最大允许平均延迟（毫秒），默认 300.0ms（默认应用于优选域名）"
+    )
+    parser.add_argument(
+        "--max-loss-rate",
+        type=float,
+        default=10.0,
+        help="三网最大允许平均丢包率（百分比），默认 10.0%（默认应用于优选域名）"
+    )
+    parser.add_argument(
+        "--filter-bestip",
+        action="store_true",
+        help="是否同时对优选 IP 进行三网延迟与丢包率质量过滤（默认不过滤，仅过滤优选域名）"
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="试运行模式，仅在终端打印预览，不写入文件"
@@ -130,6 +158,8 @@ def main(argv: List[str] = None) -> int:
                 crawl_type="domain",
                 output_path=domains_path,
                 prefix=args.prefix,
+                max_latency=args.max_latency,
+                max_loss_rate=args.max_loss_rate,
                 dry_run=args.dry_run
             )
 
@@ -140,6 +170,8 @@ def main(argv: List[str] = None) -> int:
                 crawl_type="ip",
                 output_path=bestip_path,
                 prefix=args.prefix,
+                max_latency=args.max_latency if args.filter_bestip else None,
+                max_loss_rate=args.max_loss_rate if args.filter_bestip else None,
                 dry_run=args.dry_run
             )
 

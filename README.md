@@ -17,6 +17,13 @@
 
 输出格式统一为：`CF优选IP:端口#前缀-备注`（默认前缀为 `vps789-`）
 
+### 1. 质量指标过滤规则（优选域名）
+* **三网平均延迟过滤**：采集优选域名时，计算电信（`dxLatencyAvg`）、移动（`ydLatencyAvg`）、联通（`ltLatencyAvg`）三网平均延迟。**若三网平均延迟 > 300ms，直接过滤剔除**。
+* **三网平均丢包率过滤**：计算电信（`dxPkgLostRateAvg`）、移动（`ydPkgLostRateAvg`）、联通（`ltPkgLostRateAvg`）三网平均丢包率。**若三网平均丢包率 > 10%，直接过滤剔除**。
+* **仅保留高质量节点**：输出到 `vps789-domains` 的所有节点均严格满足 `三网平均延迟 <= 300ms 且 平均丢包率 <= 10%`。
+
+### 2. 节点行格式化规则
+
 | 采集源 | 条件分支 | 格式化输出示例 | 说明 |
 | :--- | :--- | :--- | :--- |
 | **优选域名** (`remarks=domain`) | 域名且端口为 `443` | `www.shopify.com#vps789-www.shopify.com` | 443 端口省略；前缀为 `vps789-`；备注为空则复用域名 |
@@ -70,8 +77,11 @@ pytest -v
 
 ### 3. 本地执行采集
 ```bash
-# 全量采集（同时生成 vps789-domains 与 vps789-bestip）
+# 全量采集（同时生成 vps789-domains 与 vps789-bestip，域名默认过滤延迟>300ms或丢包>10%）
 python -m crawler.main --type all
+
+# 自定义质量过滤门限
+python -m crawler.main --type domain --max-latency 250 --max-loss-rate 5.0
 
 # 仅采集优选域名
 python -m crawler.main --type domain --domains-file vps789-domains

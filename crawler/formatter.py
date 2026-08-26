@@ -1,12 +1,12 @@
 """
 节点数据清洗与格式化引擎
-依据业务规则将 VPS789 采集到的优选节点数据转换为标准订阅文本格式。
+依据业务规则将 VPS789 采集到的优选节点数据转换为标准订阅文本格式，并支持按三网平均延迟和丢包率进行质量过滤。
 """
 
 import ipaddress
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -36,6 +36,88 @@ def is_valid_ip(host: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def calculate_three_network_metrics(item: Dict[str, Any]) -> Tuple[float, float]:
+    """
+    计算节点在电信、移动、联通三网下的平均延迟(ms)与平均丢包率(%)。
+
+    若电信(dx)、移动(yd)、联通(lt)各独立字段存在有效数值，则计算其算术平均值；
+    若独立字段均缺失或无效，则安全回退到 item 中的整体综合指标 (avgLatency, avgPkgLostRate)。
+
+    :param item: 节点原始字典数据
+    :return: (三网平均延迟_ms, 三网平均丢包率_pct)
+    """
+    # 提取电信、移动、联通的延迟 (ms)
+    latencies: List[float] = []
+    for key in ("dxLatencyAvg", "ydLatencyAvg", "ltLatencyAvg"):
+        val = item.get(key)
+        if val is not None:
+            try:
+                latencies.append(float(val))
+            except (ValueError, TypeError):
+                pass
+
+    if latencies:
+        avg_latency = sum(latencies) / len(latencies)
+    else:
+        # 回退到综合平均延迟
+        raw_avg = item.get("avgLatency")
+        try:
+            avg_latency = float(raw_avg) if raw_avg is not None else 0.0
+        except (ValueError, TypeError):
+            avg_latency = 0.0
+
+    # 提取电信、移动、联通的丢包率 (%)
+    loss_rates: List[float] = []
+    for key in ("dxPkgLostRateAvg", "ydPkgLostRateAvg", "ltPkgLostRateAvg"):
+        val = item.get(key)
+        if val is not None:
+            try:
+                loss_rates.append(float(val))
+            except (ValueError, TypeError):
+                pass
+
+    if loss_rates:
+        avg_loss_rate = sum(loss_rates) / len(loss_rates)
+    else:
+        # 回退到综合平均丢包率
+        raw_loss = item.get("avgPkgLostRate")
+        try:
+            avg_loss_rate = float(raw_loss) if raw_loss is not None else 0.0
+        except (ValueError, TypeError):
+            avg_loss_rate = 0.0
+
+    return avg_latency, avg_loss_rate
+
+
+def is_node_qualified(
+    item: Dict[str, Any],
+    max_latency: Optional[float] = 300.0,
+    max_loss_rate: Optional[float] = 10.0
+) -> bool:
+    """
+    判断节点是否满足网络质量指标要求（三网平均延迟与平均丢包率）。
+
+    规则：
+    1. 若三网平均延迟 > max_latency (默认 300.0ms)，则判定为不合格 (返回 False)。
+    2. 若三网平均丢包率 > max_loss_rate (默认 10.0%)，则判定为不合格 (返回 False)。
+    3. 仅当均不超过门限值时返回 True。
+
+    :param item: 节点原始字典数据
+    :param max_latency: 允许的最大平均延迟 (ms)，若为 None 则不限制延迟
+    :param max_loss_rate: 允许的最大平均丢包率 (%)，若为 None 则不限制丢包率
+    :return: 合格返回 True，否则返回 False
+    """
+    avg_latency, avg_loss_rate = calculate_three_network_metrics(item)
+
+    if max_latency is not None and avg_latency > max_latency:
+        return False
+
+    if max_loss_rate is not None and avg_loss_rate > max_loss_rate:
+        return False
+
+    return True
 
 
 def format_single_node(item: Dict[str, Any], prefix: str = "vps789-") -> Optional[str]:
@@ -103,19 +185,32 @@ def format_single_node(item: Dict[str, Any], prefix: str = "vps789-") -> Optiona
     return formatted_line
 
 
-def format_node_list(items: List[Dict[str, Any]], prefix: str = "vps789-", deduplicate: bool = True) -> str:
+def format_node_list(
+    items: List[Dict[str, Any]],
+    prefix: str = "vps789-",
+    deduplicate: bool = True,
+    max_latency: Optional[float] = None,
+    max_loss_rate: Optional[float] = None,
+) -> str:
     """
-    批量格式化节点列表为多行文本。
+    批量格式化节点列表为多行文本（支持质量指标过滤与去重）。
 
     :param items: 原始节点列表
     :param prefix: 节点备注前缀，默认 "vps789-"
     :param deduplicate: 是否对生成的行进行去重，默认 True 保留首个出现的记录
+    :param max_latency: 最大允许三网平均延迟 (ms)，若指定则过滤超标节点
+    :param max_loss_rate: 最大允许三网平均丢包率 (%)，若指定则过滤超标节点
     :return: 换行符连接的格式化文本
     """
     lines: List[str] = []
     seen = set()
 
     for item in items:
+        # 质量指标过滤判断
+        if max_latency is not None or max_loss_rate is not None:
+            if not is_node_qualified(item, max_latency=max_latency, max_loss_rate=max_loss_rate):
+                continue
+
         line = format_single_node(item, prefix=prefix)
         if not line:
             continue
