@@ -2,8 +2,8 @@ name: VPS789 Crawl Domains
 
 on:
   schedule:
-    # 默认每 6 小时整点运行一次 (UTC 时间 0点、6点、12点、18点，对应北京时间 8点、14点、20点、次日2点)
-    - cron: '0 */6 * * *'
+    # 默认每 24 小时整点运行一次 (UTC 时间 0点、6点、12点、18点，对应北京时间 8点、14点、20点、次日2点)
+    - cron: '0 */24 * * *'
   workflow_dispatch:
     inputs:
       enabled:
