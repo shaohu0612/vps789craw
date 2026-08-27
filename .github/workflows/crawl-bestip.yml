@@ -2,8 +2,8 @@ name: VPS789 Crawl Best IP
 
 on:
   schedule:
-    # 默认每 6 小时 30 分运行一次 (与域名采集错峰运行)
-    - cron: '30 */6 * * *'
+    # 默认每 12 小时 30 分运行一次 (与域名采集错峰运行)
+    - cron: '30 */12 * * *'
   workflow_dispatch:
     inputs:
       enabled:
