@@ -1,0 +1,76 @@
+name: UOUIN Crawl Best IP
+
+on:
+  schedule:
+    # 默认每 6 小时 45 分运行一次 (与 VPS789 域名和 IP 采集错峰运行)
+    - cron: '45 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      enabled:
+        description: '是否启用并执行麒麟优选 IP 采集任务'
+        required: true
+        type: boolean
+        default: true
+      min_speed:
+        description: '最低下载速度阈值 (mb/s)'
+        required: false
+        type: string
+        default: '10.0'
+
+# 授予写入仓库内容的权限
+permissions:
+  contents: write
+
+jobs:
+  crawl-and-update-uouin:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.enabled }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 检出仓库代码 (原生 Git)
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git clone --depth=1 "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" .
+
+      - name: 安装 Python 依赖
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: 执行麒麟优选 IP 采集
+        run: |
+          MIN_SPEED="${{ inputs.min_speed || '10.0' }}"
+          python3 -m crawler.uouin --min-speed "$MIN_SPEED" --output uouin-bestip
+
+      - name: 检查并提交变更
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          TOTAL_LINES=$(wc -l < uouin-bestip || echo 0)
+          echo "### 📊 麒麟优选 (UOUIN) 优选 IP 采集报告" >> $GITHUB_STEP_SUMMARY
+          echo "- **采集时间**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "- **筛选门限**: 下载速度 >= ${{ inputs.min_speed || '10.0' }} mb/s" >> $GITHUB_STEP_SUMMARY
+          echo "- **达标节点总数**: ${TOTAL_LINES} 条" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -n "$(git status --porcelain uouin-bestip)" ]; then
+            echo "检测到 uouin-bestip 产生更新，准备提交变更..."
+            git add uouin-bestip
+            git commit -m "chore(uouin): 定时更新 uouin-bestip 麒麟优选 IP 列表 [skip ci]"
+            git push origin HEAD:main
+            echo "✅ **更新状态**: 数据有变化，已自动提交并推送到 main 分支。" >> $GITHUB_STEP_SUMMARY
+            echo "麒麟优选 IP 列表更新并推送成功！"
+          else
+            echo "ℹ️ **更新状态**: 远程节点数据与仓库一致，无需产生重复空提交。" >> $GITHUB_STEP_SUMMARY
+            echo "uouin-bestip 无内容变化，跳过提交。"
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### 🔍 前 5 条数据预览 (按速度倒序):" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          head -n 5 uouin-bestip >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
