@@ -1,6 +1,6 @@
 """
-VPS789 采集与导出主入口 CLI
-支持通过命令行参数分别或全量抓取域名与 IP 列表，并输出到目标文件。
+VPS789 & UOUIN Cloudflare 优选节点采集与导出主入口 CLI
+支持通过命令行参数分别或全量抓取 VPS789 域名、VPS789 IP 以及 UOUIN 麒麟优选 IP 列表。
 """
 
 import argparse
@@ -11,6 +11,7 @@ from typing import List, Optional
 
 from crawler.client import VPS789Client
 from crawler.formatter import format_node_list
+from crawler.uouin import run_uouin_crawl
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -35,7 +36,7 @@ def process_crawl(
     dry_run: bool = False
 ) -> int:
     """
-    执行单项采集任务并保存到指定文件。
+    执行 VPS789 单项采集任务并保存到指定文件。
 
     :param client: API 客户端
     :param crawl_type: 采集类型 "domain" 或 "ip"
@@ -88,12 +89,12 @@ def main(argv: List[str] = None) -> int:
     """
     主程序入口
     """
-    parser = argparse.ArgumentParser(description="VPS789 Cloudflare 优选节点采集与格式化工具")
+    parser = argparse.ArgumentParser(description="VPS789 & UOUIN Cloudflare 优选节点采集与格式化工具")
     parser.add_argument(
         "--type",
-        choices=["domain", "ip", "all"],
+        choices=["domain", "ip", "uouin", "all"],
         default="all",
-        help="采集类型: domain (仅优选域名), ip (仅优选 IP), all (两者皆采集)"
+        help="采集类型: domain (仅优选域名), ip (仅 VPS789 优选 IP), uouin (仅麒麟优选 IP), all (全量采集)"
     )
     parser.add_argument(
         "--output-dir",
@@ -108,7 +109,18 @@ def main(argv: List[str] = None) -> int:
     parser.add_argument(
         "--bestip-file",
         default="vps789-bestip",
-        help="优选 IP 输出文件名，默认为 vps789-bestip"
+        help="VPS789 优选 IP 输出文件名，默认为 vps789-bestip"
+    )
+    parser.add_argument(
+        "--uouin-file",
+        default="uouin-bestip",
+        help="麒麟优选 IP 输出文件名，默认为 uouin-bestip"
+    )
+    parser.add_argument(
+        "--min-speed",
+        type=float,
+        default=10.0,
+        help="麒麟优选最低下载速度阈值 (mb/s)，默认 10.0"
     )
     parser.add_argument(
         "--prefix",
@@ -125,7 +137,7 @@ def main(argv: List[str] = None) -> int:
         "--max-loss-rate",
         type=float,
         default=10.0,
-        help="三网最大允许平均丢包率（百分比），默认 10.0%（默认应用于优选域名）"
+        help="三网最大允许平均丢包率（百分比），默认 10.0%%（默认应用于优选域名）"
     )
     parser.add_argument(
         "--filter-bestip",
@@ -148,10 +160,9 @@ def main(argv: List[str] = None) -> int:
     setup_logging(args.verbose)
     logger = logging.getLogger(__name__)
 
-    client = VPS789Client()
-
     try:
         if args.type in ("domain", "all"):
+            client = VPS789Client()
             domains_path = os.path.join(args.output_dir, args.domains_file)
             process_crawl(
                 client=client,
@@ -164,6 +175,7 @@ def main(argv: List[str] = None) -> int:
             )
 
         if args.type in ("ip", "all"):
+            client = VPS789Client()
             bestip_path = os.path.join(args.output_dir, args.bestip_file)
             process_crawl(
                 client=client,
@@ -172,6 +184,15 @@ def main(argv: List[str] = None) -> int:
                 prefix=args.prefix,
                 max_latency=args.max_latency if args.filter_bestip else None,
                 max_loss_rate=args.max_loss_rate if args.filter_bestip else None,
+                dry_run=args.dry_run
+            )
+
+        if args.type in ("uouin", "all"):
+            uouin_path = os.path.join(args.output_dir, args.uouin_file)
+            logger.info(f"===> 开始处理采集任务: 类型=[uouin] (速度>={args.min_speed}mb/s) -> 输出目标=[{uouin_path}]")
+            run_uouin_crawl(
+                output_path=uouin_path,
+                min_speed=args.min_speed,
                 dry_run=args.dry_run
             )
 

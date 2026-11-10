@@ -39,3 +39,7 @@ htmlcov/
 # Local env & agent rules
 .env
 AGENTS.md
+agent.md
+
+# Documentation ignored from repository
+doc/
