@@ -10,7 +10,7 @@ import sys
 from typing import List, Optional
 
 from crawler.client import VPS789Client
-from crawler.formatter import format_node_list
+from crawler.formatter import format_vps789_list
 from crawler.uouin import run_uouin_crawl
 
 
@@ -18,6 +18,13 @@ def setup_logging(verbose: bool = False) -> None:
     """
     初始化日志记录器
     """
+    if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
@@ -31,6 +38,7 @@ def process_crawl(
     crawl_type: str,
     output_path: str,
     prefix: str = "vps789-",
+    min_score: Optional[float] = 80.0,
     max_latency: Optional[float] = None,
     max_loss_rate: Optional[float] = None,
     dry_run: bool = False
@@ -42,24 +50,27 @@ def process_crawl(
     :param crawl_type: 采集类型 "domain" 或 "ip"
     :param output_path: 输出文件完整路径
     :param prefix: 备注前缀，默认为 "vps789-"
+    :param min_score: 优选域名最低评分阈值 (仅在 crawl_type="domain" 时生效)
     :param max_latency: 最大允许三网平均延迟 (ms)，None 表示不限制
-    :param max_loss_rate: 最大允许三网平均丢包率 (%)，None 表示不限制
+    :param max_loss_rate: 最大允许三网平均丢包率 (%%)，None 表示不限制
     :param dry_run: 是否为试运行模式（不写磁盘）
     :return: 抓取并格式化的有效行数
     """
     logger = logging.getLogger(__name__)
     filter_info = f" (质量过滤: 延迟<={max_latency}ms, 丢包率<={max_loss_rate}%)" if (max_latency is not None or max_loss_rate is not None) else ""
-    logger.info(f"===> 开始处理采集任务: 类型=[{crawl_type}]{filter_info} -> 输出目标=[{output_path}]")
+    score_info = f" (评分门限: >={min_score})" if (crawl_type == "domain" and min_score is not None) else ""
+    logger.info(f"===> 开始处理采集任务: 类型=[{crawl_type}]{score_info}{filter_info} -> 输出目标=[{output_path}]")
 
     raw_items = client.fetch_all(remarks_type=crawl_type)
     if not raw_items:
         logger.warning(f"未能获取到 [{crawl_type}] 任何数据，任务终止")
         return 0
 
-    formatted_text = format_node_list(
+    formatted_text = format_vps789_list(
         raw_items,
+        crawl_type=crawl_type,
         prefix=prefix,
-        deduplicate=True,
+        min_score=min_score if crawl_type == "domain" else None,
         max_latency=max_latency,
         max_loss_rate=max_loss_rate
     )
@@ -79,7 +90,8 @@ def process_crawl(
 
     # 写入目标文件 (UTF-8 编码，保留标准换行)
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(formatted_text + "\n")
+        if formatted_text:
+            f.write(formatted_text + "\n")
 
     logger.info(f"成功保存到文件: {output_path} (共 {lines_count} 行)")
     return lines_count
@@ -115,6 +127,12 @@ def main(argv: List[str] = None) -> int:
         "--uouin-file",
         default="uouin-bestip",
         help="麒麟优选 IP 输出文件名，默认为 uouin-bestip"
+    )
+    parser.add_argument(
+        "--min-score",
+        type=float,
+        default=80.0,
+        help="优选 CNAME 域名评分筛选阈值，默认 80.0"
     )
     parser.add_argument(
         "--min-speed",
@@ -169,6 +187,7 @@ def main(argv: List[str] = None) -> int:
                 crawl_type="domain",
                 output_path=domains_path,
                 prefix=args.prefix,
+                min_score=args.min_score,
                 max_latency=args.max_latency,
                 max_loss_rate=args.max_loss_rate,
                 dry_run=args.dry_run
@@ -182,6 +201,7 @@ def main(argv: List[str] = None) -> int:
                 crawl_type="ip",
                 output_path=bestip_path,
                 prefix=args.prefix,
+                min_score=None,
                 max_latency=args.max_latency if args.filter_bestip else None,
                 max_loss_rate=args.max_loss_rate if args.filter_bestip else None,
                 dry_run=args.dry_run

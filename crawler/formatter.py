@@ -1,36 +1,48 @@
 """
-节点数据清洗与格式化引擎
-依据业务规则将 VPS789 采集到的优选节点数据转换为标准订阅文本格式，并支持按三网平均延迟和丢包率进行质量过滤。
+VPS789 节点数据清洗与格式化引擎
+支持 CNAME 域名评分筛选 (>=80)、按下载速度倒序排列、地理位置识别 (国家/城市)、延迟与速度规范化。
+最终输出成果标准格式: IP:端口#vps789-国家简码-国家 城市-延迟-速度 (无法确认城市时确认国家即可)
 """
 
 import ipaddress
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from crawler.geo import (
+    GeoInfo,
+    GeoResolver,
+    batch_resolve_domains,
+)
+
+logger = logging.getLogger(__name__)
+
 
 @dataclass
-class FormattedNode:
+class ParsedNode:
     """
-    格式化后的节点数据结构
+    清洗解析后的节点中间模型
     """
-    raw_ip: str
+    host: str
     port: int
-    raw_remarks: Optional[str]
     is_ip: bool
-    formatted_line: str
+    is_ipv6: bool
+    score: Optional[float]
+    latency: float
+    speed: float
+    latency_str: str
+    speed_str: str
+    raw_item: Dict[str, Any]
 
 
 def is_valid_ip(host: str) -> bool:
     """
     判断给定主机字符串是否为合法的 IPv4 或 IPv6 地址。
-
-    :param host: 主机名或 IP 字符串
-    :return: 若为 IP 地址返回 True，否则（如普通域名）返回 False
     """
     if not host or not isinstance(host, str):
         return False
-    clean_host = host.strip()
+    clean_host = host.strip("[] \t\r\n")
     try:
         ipaddress.ip_address(clean_host)
         return True
@@ -41,12 +53,7 @@ def is_valid_ip(host: str) -> bool:
 def calculate_three_network_metrics(item: Dict[str, Any]) -> Tuple[float, float]:
     """
     计算节点在电信、移动、联通三网下的平均延迟(ms)与平均丢包率(%)。
-
-    若电信(dx)、移动(yd)、联通(lt)各独立字段存在有效数值，则计算其算术平均值；
-    若独立字段均缺失或无效，则安全回退到 item 中的整体综合指标 (avgLatency, avgPkgLostRate)。
-
-    :param item: 节点原始字典数据
-    :return: (三网平均延迟_ms, 三网平均丢包率_pct)
+    若三网独立字段缺失，回退到整体综合指标 (avgLatency, avgPkgLostRate)。
     """
     # 提取电信、移动、联通的延迟 (ms)
     latencies: List[float] = []
@@ -61,7 +68,6 @@ def calculate_three_network_metrics(item: Dict[str, Any]) -> Tuple[float, float]
     if latencies:
         avg_latency = sum(latencies) / len(latencies)
     else:
-        # 回退到综合平均延迟
         raw_avg = item.get("avgLatency")
         try:
             avg_latency = float(raw_avg) if raw_avg is not None else 0.0
@@ -81,7 +87,6 @@ def calculate_three_network_metrics(item: Dict[str, Any]) -> Tuple[float, float]
     if loss_rates:
         avg_loss_rate = sum(loss_rates) / len(loss_rates)
     else:
-        # 回退到综合平均丢包率
         raw_loss = item.get("avgPkgLostRate")
         try:
             avg_loss_rate = float(raw_loss) if raw_loss is not None else 0.0
@@ -97,17 +102,7 @@ def is_node_qualified(
     max_loss_rate: Optional[float] = 10.0
 ) -> bool:
     """
-    判断节点是否满足网络质量指标要求（三网平均延迟与平均丢包率）。
-
-    规则：
-    1. 若三网平均延迟 > max_latency (默认 300.0ms)，则判定为不合格 (返回 False)。
-    2. 若三网平均丢包率 > max_loss_rate (默认 10.0%)，则判定为不合格 (返回 False)。
-    3. 仅当均不超过门限值时返回 True。
-
-    :param item: 节点原始字典数据
-    :param max_latency: 允许的最大平均延迟 (ms)，若为 None 则不限制延迟
-    :param max_loss_rate: 允许的最大平均丢包率 (%)，若为 None 则不限制丢包率
-    :return: 合格返回 True，否则返回 False
+    判断节点是否满足三网平均延迟与平均丢包率质量红线。
     """
     avg_latency, avg_loss_rate = calculate_three_network_metrics(item)
 
@@ -120,28 +115,59 @@ def is_node_qualified(
     return True
 
 
-def format_single_node(item: Dict[str, Any], prefix: str = "vps789-") -> Optional[str]:
+def parse_speed_value(item: Dict[str, Any]) -> Tuple[float, str]:
     """
-    格式化单条 VPS789 节点数据为: CF优选IP[:端口]#前缀备注 (例如: cdn.com#vps789-备注 或 1.1.1.1:443#vps789-1.1.1.1)
-
-    规则:
-    1. CF优选IP取自 item['ip']。
-    2. 若 CF优选IP 为 IP 地址，则 :端口 不可省略（例如 104.21.20.210:443）。
-    3. 若 CF优选IP 为正常域名：
-       - 若端口为 443，则 :端口 省略（例如 cdn.example.com）。
-       - 若端口不为 443，则 :端口 保留（例如 cdn.example.com:8443）。
-    4. 备注取自 item['providerUrl']，若为空或纯空白，则复用 CF优选IP 的内容。
-    5. 前缀默认为 "vps789-"，插入在 # 与备注内容之间。
-
-    :param item: 节点原始字典数据
-    :param prefix: 备注前缀，默认为 "vps789-"
-    :return: 格式化后的字符串行，若数据不合法则返回 None
+    提取下载速度数值 (单位 mb/s) 与格式化展示字符串。
+    VPS789 接口中 downloadSpeed 常见值为字符串（如 '14200' 代表 14.20 mb/s）。
+    若无测速数据，则默认返回 (0.0, '0.00mb/s')。
     """
-    raw_ip = str(item.get("ip", "")).strip()
-    if not raw_ip:
+    raw_val = item.get("downloadSpeed")
+    if raw_val is None:
+        return 0.0, "0.00mb/s"
+
+    try:
+        val_str = str(raw_val).strip()
+        num_match = re.search(r"(\d+(?:\.\d+)?)", val_str)
+        if not num_match:
+            return 0.0, "0.00mb/s"
+
+        num = float(num_match.group(1))
+        # 若数值大于 1000 (例如 14200)，将其折算为 mb/s (除以 1000)
+        if num >= 1000:
+            speed_mb = num / 1000.0
+        else:
+            speed_mb = num
+
+        return round(speed_mb, 2), f"{speed_mb:.2f}mb/s"
+    except Exception:
+        return 0.0, "0.00mb/s"
+
+
+def parse_latency_value(item: Dict[str, Any]) -> Tuple[float, str]:
+    """
+    提取平均延迟数值 (ms) 与格式化展示字符串。
+    优先计算三网平均延迟，若为 0 则使用 avgLatency。
+    """
+    avg_lat, _ = calculate_three_network_metrics(item)
+    if avg_lat <= 0:
+        raw_lat = item.get("avgLatency")
+        try:
+            avg_lat = float(raw_lat) if raw_lat is not None else 0.0
+        except (ValueError, TypeError):
+            avg_lat = 0.0
+
+    return round(avg_lat, 2), f"{round(avg_lat):.0f}ms"
+
+
+def parse_single_item(item: Dict[str, Any]) -> Optional[ParsedNode]:
+    """
+    解析单条原始字典数据为 ParsedNode
+    """
+    raw_host = str(item.get("ip", "")).strip()
+    if not raw_host:
         return None
 
-    # 解析端口，默认 443
+    # 提取端口，页面无端口的默认为 443
     raw_port = item.get("pingPort")
     try:
         port = int(raw_port) if raw_port is not None else 443
@@ -150,74 +176,209 @@ def format_single_node(item: Dict[str, Any], prefix: str = "vps789-") -> Optiona
     except (ValueError, TypeError):
         port = 443
 
-    # 判断是否为 IP 地址
-    is_ip = is_valid_ip(raw_ip)
-
-    # 格式化主机与端口部分
+    clean_host = raw_host.strip("[]")
+    is_ip = is_valid_ip(clean_host)
+    is_ipv6 = False
     if is_ip:
-        # IP 地址：:端口 绝不可省略
-        host_port_str = f"{raw_ip}:{port}"
+        try:
+            is_ipv6 = ipaddress.ip_address(clean_host).version == 6
+        except ValueError:
+            is_ipv6 = False
+
+    # 提取评分 (优选 CNAME 域名评分)
+    score_raw = item.get("cfCnamescore")
+    score: Optional[float] = None
+    if score_raw is not None:
+        try:
+            score = float(score_raw)
+        except (ValueError, TypeError):
+            score = None
+
+    speed_val, speed_str = parse_speed_value(item)
+    lat_val, lat_str = parse_latency_value(item)
+
+    return ParsedNode(
+        host=clean_host,
+        port=port,
+        is_ip=is_ip,
+        is_ipv6=is_ipv6,
+        score=score,
+        latency=lat_val,
+        speed=speed_val,
+        latency_str=lat_str,
+        speed_str=speed_str,
+        raw_item=item
+    )
+
+
+def format_node_line(
+    node: ParsedNode,
+    geo: Optional[GeoInfo] = None,
+    prefix: str = "vps789-"
+) -> str:
+    """
+    格式化单行输出:
+    IP:端口#vps789-国家简码-国家 城市-延迟-速度
+    若城市无法确认，输出: IP:端口#vps789-国家简码-国家-延迟-速度
+    """
+    # 格式化主机与端口 (页面无端口默认 443，IPv6 使用 [IPv6]:端口)
+    if node.is_ipv6:
+        host_port = f"[{node.host}]:{node.port}"
     else:
-        # 正常域名：端口为 443 时省略，否则保留
-        if port == 443:
-            host_port_str = raw_ip
+        host_port = f"{node.host}:{node.port}"
+
+    clean_prefix = prefix.strip()
+    if clean_prefix and not clean_prefix.endswith("-"):
+        clean_prefix = f"{clean_prefix}-"
+
+    # geo.geo_text 自动处理城市未知时仅输出 '国家简码-国家'
+    geo_desc = geo.geo_text if geo else "US-美国"
+
+    return f"{host_port}#{clean_prefix}{geo_desc}-{node.latency_str}-{node.speed_str}"
+
+
+def format_single_node(
+    item: Dict[str, Any],
+    prefix: str = "vps789-",
+    geo: Optional[GeoInfo] = None
+) -> Optional[str]:
+    """
+    格式化单条节点数据 (兼顾向后兼容与直接调用)
+    """
+    node = parse_single_item(item)
+    if not node:
+        return None
+    return format_node_line(node, geo, prefix=prefix)
+
+
+def format_vps789_list(
+    items: List[Dict[str, Any]],
+    crawl_type: str = "domain",
+    prefix: str = "vps789-",
+    min_score: Optional[float] = 80.0,
+    max_latency: Optional[float] = 300.0,
+    max_loss_rate: Optional[float] = 10.0,
+    geo_resolver: Optional[GeoResolver] = None
+) -> str:
+    """
+    VPS789 节点全流程批量格式化引擎。
+    规则:
+    1. 优选 CNAME 域名 (domain):
+       - 筛选评分 >= min_score (默认 80)
+       - 质量指标过滤 (平均延迟 <= max_latency, 丢包率 <= max_loss_rate)
+       - 并发 DNS 解析域名获取 IP，进而查询 Geo 地理信息 (无法确认城市则确认国家)
+       - 最终按照下载速度倒序排列 (从高到低)
+    2. 优选 IP (ip):
+       - 质量指标过滤 (若配置)
+       - 批量查询 Geo 地理信息 (国家 城市)
+       - 延迟升序或优选顺序排列
+    """
+    if not items:
+        return ""
+
+    resolver = geo_resolver or GeoResolver()
+
+    # 1. 初步解析与过滤
+    parsed_nodes: List[ParsedNode] = []
+    seen_hosts = set()
+
+    for it in items:
+        node = parse_single_item(it)
+        if not node:
+            continue
+
+        # CNAME 优选域名模式: 筛选评分 >= min_score
+        if crawl_type == "domain":
+            if min_score is not None:
+                if node.score is None or node.score < min_score:
+                    continue
+
+        # 网络质量过滤 (三网平均延迟与丢包率)
+        if max_latency is not None or max_loss_rate is not None:
+            if not is_node_qualified(node.raw_item, max_latency=max_latency, max_loss_rate=max_loss_rate):
+                continue
+
+        # 主机去重
+        if node.host in seen_hosts:
+            continue
+        seen_hosts.add(node.host)
+        parsed_nodes.append(node)
+
+    if not parsed_nodes:
+        return ""
+
+    # 2. 地理位置解析
+    # 若为域名，先解析为 IP，再解析 Geo
+    host_to_ip: Dict[str, str] = {}
+    ips_to_query: List[str] = []
+
+    domains_to_resolve: List[str] = [n.host for n in parsed_nodes if not n.is_ip]
+    if domains_to_resolve:
+        logger.info(f"正在并发解析 {len(domains_to_resolve)} 个优选域名的 DNS A 记录...")
+        resolved_dns = batch_resolve_domains(domains_to_resolve)
+        for dom, ip in resolved_dns.items():
+            if ip:
+                host_to_ip[dom] = ip
+                ips_to_query.append(ip)
+
+    for n in parsed_nodes:
+        if n.is_ip:
+            host_to_ip[n.host] = n.host
+            ips_to_query.append(n.host)
+
+    # 批量解析 IP 地理信息
+    geo_map: Dict[str, GeoInfo] = {}
+    if ips_to_query:
+        logger.info(f"正在批量解析 {len(ips_to_query)} 个节点的地理位置信息...")
+        geo_map = resolver.resolve_all(ips_to_query)
+
+    # 3. 组装输出文本并排序
+    # 格式化元组: (sort_key, line_str)
+    formatted_entries: List[Tuple[Tuple[float, float], str]] = []
+
+    for node in parsed_nodes:
+        mapped_ip = host_to_ip.get(node.host)
+        geo = geo_map.get(mapped_ip) if mapped_ip else None
+        if not geo:
+            # 兜底：若未解析到 IP 或 Geo，无法确认城市时确认国家即可
+            geo = GeoInfo(country_code="US", country="美国", city="")
+
+        line = format_node_line(node, geo, prefix=prefix)
+
+        # 排序键规则:
+        # domain 模式: 按照下载速度倒序 (从大到小, -speed)，同速度按延迟升序 (有效延迟优先)
+        # ip 模式: 按照延迟升序 (有效延迟 > 0 优先)，无效延迟排在最后
+        effective_latency = node.latency if node.latency > 0 else 9999.0
+        if crawl_type == "domain":
+            sort_key = (-node.speed, effective_latency)
         else:
-            host_port_str = f"{raw_ip}:{port}"
+            sort_key = (effective_latency, -node.speed)
 
-    # 解析备注部分 (网页端“备注”列对应字段为 providerUrl)
-    provider_url = item.get("providerUrl")
-    if provider_url is not None and str(provider_url).strip():
-        # 清理可能存在的换行与前后空格
-        clean_remarks = re.sub(r"[\r\n]+", " ", str(provider_url)).strip()
-    else:
-        # 备注为空时，复用域名/IP列内容
-        clean_remarks = raw_ip
+        formatted_entries.append((sort_key, line))
 
-    # 处理前缀（确保前缀格式为 "vps789-"）
-    if prefix:
-        clean_prefix = prefix.strip()
-        if not clean_prefix.endswith("-"):
-            clean_prefix = f"{clean_prefix}-"
-    else:
-        clean_prefix = ""
+    # 执行排序
+    formatted_entries.sort(key=lambda x: x[0])
 
-    formatted_line = f"{host_port_str}#{clean_prefix}{clean_remarks}"
-    return formatted_line
+    lines = [entry[1] for entry in formatted_entries]
+    return "\n".join(lines)
 
 
+# 保持与旧接口的向下兼容
 def format_node_list(
     items: List[Dict[str, Any]],
     prefix: str = "vps789-",
     deduplicate: bool = True,
     max_latency: Optional[float] = None,
     max_loss_rate: Optional[float] = None,
+    crawl_type: str = "domain",
+    min_score: Optional[float] = 80.0
 ) -> str:
-    """
-    批量格式化节点列表为多行文本（支持质量指标过滤与去重）。
-
-    :param items: 原始节点列表
-    :param prefix: 节点备注前缀，默认 "vps789-"
-    :param deduplicate: 是否对生成的行进行去重，默认 True 保留首个出现的记录
-    :param max_latency: 最大允许三网平均延迟 (ms)，若指定则过滤超标节点
-    :param max_loss_rate: 最大允许三网平均丢包率 (%)，若指定则过滤超标节点
-    :return: 换行符连接的格式化文本
-    """
-    lines: List[str] = []
-    seen = set()
-
-    for item in items:
-        # 质量指标过滤判断
-        if max_latency is not None or max_loss_rate is not None:
-            if not is_node_qualified(item, max_latency=max_latency, max_loss_rate=max_loss_rate):
-                continue
-
-        line = format_single_node(item, prefix=prefix)
-        if not line:
-            continue
-        if deduplicate:
-            if line in seen:
-                continue
-            seen.add(line)
-        lines.append(line)
-
-    return "\n".join(lines)
+    """向下兼容的批量格式化入口"""
+    return format_vps789_list(
+        items=items,
+        crawl_type=crawl_type,
+        prefix=prefix,
+        min_score=min_score if crawl_type == "domain" else None,
+        max_latency=max_latency,
+        max_loss_rate=max_loss_rate
+    )
