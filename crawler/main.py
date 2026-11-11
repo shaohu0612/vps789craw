@@ -1,6 +1,6 @@
 """
 VPS789 & UOUIN Cloudflare 优选节点采集与导出主入口 CLI
-支持通过命令行参数分别或全量抓取 VPS789 域名、VPS789 IP 以及 UOUIN 麒麟优选 IP 列表。
+支持通过命令行参数分别或全量抓取 VPS789 域名、VPS789 IP、UOUIN 麒麟优选 IP 以及优选域名转 IP (domains2ip) 列表。
 """
 
 import argparse
@@ -10,6 +10,7 @@ import sys
 from typing import List, Optional
 
 from crawler.client import VPS789Client
+from crawler.domains2ip import run_domains2ip
 from crawler.formatter import format_vps789_list
 from crawler.uouin import run_uouin_crawl
 
@@ -104,9 +105,9 @@ def main(argv: List[str] = None) -> int:
     parser = argparse.ArgumentParser(description="VPS789 & UOUIN Cloudflare 优选节点采集与格式化工具")
     parser.add_argument(
         "--type",
-        choices=["domain", "ip", "uouin", "all"],
+        choices=["domain", "ip", "uouin", "domain2ip", "all"],
         default="all",
-        help="采集类型: domain (仅优选域名), ip (仅 VPS789 优选 IP), uouin (仅麒麟优选 IP), all (全量采集)"
+        help="采集类型: domain (优选域名及自动转IP), ip (仅 VPS789 优选 IP), uouin (仅麒麟优选 IP), domain2ip (仅域名转IP), all (全量采集)"
     )
     parser.add_argument(
         "--output-dir",
@@ -117,6 +118,11 @@ def main(argv: List[str] = None) -> int:
         "--domains-file",
         default="vps789-domains",
         help="优选域名输出文件名，默认为 vps789-domains"
+    )
+    parser.add_argument(
+        "--domains2ip-file",
+        default="vps789-domains2ip",
+        help="优选域名转 IP 输出文件名，默认为 vps789-domains2ip"
     )
     parser.add_argument(
         "--bestip-file",
@@ -163,6 +169,11 @@ def main(argv: List[str] = None) -> int:
         help="是否同时对优选 IP 进行三网延迟与丢包率质量过滤（默认不过滤，仅过滤优选域名）"
     )
     parser.add_argument(
+        "--no-domains2ip",
+        action="store_true",
+        help="采集优选域名后是否跳过域名转 IP 步骤（默认不跳过，自动紧接着转 IP）"
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="试运行模式，仅在终端打印预览，不写入文件"
@@ -179,9 +190,11 @@ def main(argv: List[str] = None) -> int:
     logger = logging.getLogger(__name__)
 
     try:
+        domains_path = os.path.join(args.output_dir, args.domains_file)
+        domains2ip_path = os.path.join(args.output_dir, args.domains2ip_file)
+
         if args.type in ("domain", "all"):
             client = VPS789Client()
-            domains_path = os.path.join(args.output_dir, args.domains_file)
             process_crawl(
                 client=client,
                 crawl_type="domain",
@@ -191,6 +204,24 @@ def main(argv: List[str] = None) -> int:
                 max_latency=args.max_latency,
                 max_loss_rate=args.max_loss_rate,
                 dry_run=args.dry_run
+            )
+
+            # 域名采集完成后，紧接着执行多线程域名解析获得 IP 并进行地理位置增强
+            if not args.no_domains2ip and not args.dry_run:
+                logger.info("===> 紧接着执行优选域名转 IP 任务 (方案3: 域名转 IP 测速模式)...")
+                run_domains2ip(
+                    domains_file=domains_path,
+                    output_file=domains2ip_path,
+                    resolve_v6=True
+                )
+
+        if args.type == "domain2ip":
+            # 独立执行域名转 IP 任务
+            logger.info(f"===> 单独执行优选域名转 IP 任务: 输入=[{domains_path}] -> 输出=[{domains2ip_path}]")
+            run_domains2ip(
+                domains_file=domains_path,
+                output_file=domains2ip_path,
+                resolve_v6=True
             )
 
         if args.type in ("ip", "all"):

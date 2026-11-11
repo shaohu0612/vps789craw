@@ -8,6 +8,8 @@
 
 * **VPS789 优选域名列表**：
   `https://raw.githubusercontent.com/shaohu0612/vps789craw/refs/heads/main/vps789-domains`
+* **VPS789 域名转 IP 列表 (高并发DNS解析+Geo增强+速度倒序)**：
+  `https://raw.githubusercontent.com/shaohu0612/vps789craw/refs/heads/main/vps789-domains2ip`
 * **VPS789 优选 IP 列表**：
   `https://raw.githubusercontent.com/shaohu0612/vps789craw/refs/heads/main/vps789-bestip`
 * **UOUIN 麒麟优选 IP 列表 (速度 >= 10mb/s 倒序)**：
@@ -28,7 +30,13 @@
 * **备注处理**：
   * 拼接前缀 `vps789-` 与备注；备注为空时复用域名/IP 字段。
 
-### 2. UOUIN 麒麟优选 IP 格式化规则
+### 2. VPS789 域名转 IP（vps789-domains2ip）规则
+部分自建或旧版 Worker 订阅引擎（如旧版 `cfnew`、`edgetunnel`）在拉取域名时会截断 `#` 后面的测速备注。为此系统提供域名转 IP 机制：
+* **底层高并发解析**：基于 RFC 1035 UDP 纯原生二进制报文解析，支持公共 DNS 递归穿透与系统 DNS 降级，自动过滤内网及保留地址。
+* **指标继承与去重**：继承原优选域名的实测下载速度与延迟；多域名解析至同一 Anycast IP 时，自动保留最高速度最优记录。
+* **输出规范**：`IP:443#vps789-国家简码-国家 城市-延迟-速度`，严格按下载速度倒序排列。
+
+### 3. UOUIN 麒麟优选 IP 格式化规则
 输出格式统一为：`ip:端口#麒麟优选-线路-国家简码-国家 城市-延迟-速度`
 
 * **页面刷新机制与逆向签名**：
@@ -60,10 +68,14 @@ vps789craw/
 ├── vps789-domains             # VPS789 优选域名最新输出文件
 ├── vps789-bestip              # VPS789 优选 IP 最新输出文件
 ├── uouin-bestip               # UOUIN 麒麟优选 IP 最新输出文件 (速度>=10mb/s 倒序)
+├── vps789-domains2ip          # VPS789 域名转 IP 最新输出文件 (高并发DNS解析+Geo增强+速度倒序)
 ├── crawler/
 │   ├── __init__.py
 │   ├── crypto.py              # VPS789 动态 DES-CBC 加解密与鉴权 Token 生成
 │   ├── client.py              # VPS789 API 客户端（自动重试、分页拉取与解密）
+│   ├── geo.py                 # 通用 IP/域名高精度地理信息与中文化模块 (GeoResolver)
+│   ├── dns_resolver.py        # 原生 RFC 1035 UDP 高并发 DNS 解析模块
+│   ├── domains2ip.py          # 优选域名转 IP 业务编排与格式化引擎
 │   ├── formatter.py           # VPS789 节点清洗与格式化引擎
 │   ├── uouin.py               # UOUIN 麒麟优选逆向采集、Geo 增强与排序引擎
 │   └── main.py                # 命令行统一入口
@@ -72,10 +84,11 @@ vps789craw/
 │   ├── test_crypto.py         # 加解密与签名单元测试
 │   ├── test_formatter.py      # 格式化规则全场景测试
 │   ├── test_client.py         # API 客户端 Mock 测试
-│   └── test_uouin.py          # UOUIN 签名、过滤、Geo 与排序测试
+│   ├── test_uouin.py          # UOUIN 签名、过滤、Geo 与排序测试
+│   └── test_domains2ip.py     # 域名转 IP 解析、指标继承与去重测试
 └── .github/
     └── workflows/
-        ├── crawl-domains.yml  # VPS789 优选域名采集工作流
+        ├── crawl-domains.yml  # VPS789 优选域名与 domains2ip 联动采集工作流
         ├── crawl-bestip.yml   # VPS789 优选 IP 采集工作流
         └── crawl-uouin.yml    # UOUIN 麒麟优选 IP 采集工作流 (每 6 小时刷新)
 ```
@@ -91,7 +104,7 @@ pip install -r requirements.txt
 
 ### 2. 运行全部单元测试
 ```bash
-pytest -v
+python -m unittest discover tests
 ```
 
 ### 3. 本地执行采集
@@ -113,13 +126,16 @@ python -m crawler.uouin --dry-run
 # 仅采集麒麟优选 IP
 python -m crawler.main --type uouin
 
-# 仅采集 VPS789 优选域名
-python -m crawler.main --type domain --domains-file vps789-domains
+# 采集 VPS789 优选域名（并自动联动生成 vps789-domains2ip）
+python -m crawler.main --type domain
+
+# 仅从已有的 vps789-domains 执行域名转 IP
+python -m crawler.main --type domain2ip
 
 # 仅采集 VPS789 优选 IP
 python -m crawler.main --type ip --bestip-file vps789-bestip
 
-# 全量全源采集 (同时更新 vps789-domains, vps789-bestip 与 uouin-bestip)
+# 全量全源采集 (更新 vps789-domains, vps789-domains2ip, vps789-bestip 与 uouin-bestip)
 python -m crawler.main --type all
 ```
 
@@ -129,11 +145,11 @@ python -m crawler.main --type all
 
 ### 1. 定时器独立控制
 本项目配置了三个完全独立的 GitHub Actions 工作流：
-* **VPS789 优选域名** (`.github/workflows/crawl-domains.yml`)：每 6 小时整点 (`0 */6 * * *`)
+* **VPS789 优选域名与转IP** (`.github/workflows/crawl-domains.yml`)：每 24 小时运行，采集域名后无缝触发解析与 Geo 增强
 * **VPS789 优选 IP** (`.github/workflows/crawl-bestip.yml`)：每 6 小时 30 分 (`30 */6 * * *`)
 * **UOUIN 麒麟优选 IP** (`.github/workflows/crawl-uouin.yml`)：每 6 小时 45 分 (`45 */6 * * *`)
 
 ### 2. 手动触发与参数控制
 在 GitHub 仓库 **Actions** 页面中，可随时选中任意工作流点击 **Run workflow** 手动触发：
-* 支持自定义最低下载速度（如可在界面输入 `min_speed: 10.0`）。
+* 支持自定义最低下载速度或过滤门限。
 * 检测到文件内容产生变更时自动 commit & push；无变更时跳过提交，避免产生多余空提交。
