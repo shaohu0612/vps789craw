@@ -37,33 +37,40 @@ jobs:
           python3 -m pip install --upgrade pip
           pip install --no-cache-dir -r requirements.txt
 
-      - name: 执行优选域名采集
+      - name: 执行优选域名采集与域名转IP
         run: |
-          python3 -m crawler.main --type domain --domains-file vps789-domains
+          python3 -m crawler.main --type domain --domains-file vps789-domains --domains2ip-file vps789-domains2ip
 
       - name: 检查并提交变更
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
-          TOTAL_LINES=$(wc -l < vps789-domains || echo 0)
-          echo "### 📊 VPS789 优选域名采集报告" >> $GITHUB_STEP_SUMMARY
+          TOTAL_DOMAINS=$(wc -l < vps789-domains || echo 0)
+          TOTAL_IPS=$(wc -l < vps789-domains2ip || echo 0)
+          echo "### 📊 VPS789 优选域名与转IP采集报告" >> $GITHUB_STEP_SUMMARY
           echo "- **采集时间**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
-          echo "- **有效节点总数**: ${TOTAL_LINES} 条" >> $GITHUB_STEP_SUMMARY
+          echo "- **优选域名总数 (vps789-domains)**: ${TOTAL_DOMAINS} 条" >> $GITHUB_STEP_SUMMARY
+          echo "- **解析IP总数 (vps789-domains2ip)**: ${TOTAL_IPS} 条" >> $GITHUB_STEP_SUMMARY
           
-          if [ -n "$(git status --porcelain vps789-domains)" ]; then
-            echo "检测到 vps789-domains 产生更新，准备提交变更..."
-            git add vps789-domains
-            git commit -m "chore(domain): 定时更新 vps789-domains 优选域名列表 [skip ci]"
+          if [ -n "$(git status --porcelain vps789-domains vps789-domains2ip)" ]; then
+            echo "检测到 vps789-domains 或 vps789-domains2ip 产生更新，准备提交变更..."
+            git add vps789-domains vps789-domains2ip
+            git commit -m "chore(domain): 定时更新 vps789-domains 及 vps789-domains2ip [skip ci]"
             git push origin HEAD:main
             echo "✅ **更新状态**: 数据有变化，已自动提交并推送到 main 分支。" >> $GITHUB_STEP_SUMMARY
-            echo "优选域名列表更新并推送成功！"
+            echo "优选域名及域名转IP列表更新并推送成功！"
           else
             echo "ℹ️ **更新状态**: 远程节点数据与仓库一致，无需产生重复空提交。" >> $GITHUB_STEP_SUMMARY
-            echo "vps789-domains 无内容变化，跳过提交。"
+            echo "目标文件无内容变化，跳过提交。"
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### 🔍 前 5 条数据预览:" >> $GITHUB_STEP_SUMMARY
+          echo "#### 🔍 优选域名 (前 5 条预览):" >> $GITHUB_STEP_SUMMARY
           echo '```text' >> $GITHUB_STEP_SUMMARY
           head -n 5 vps789-domains >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### 🔍 域名转IP (前 5 条预览):" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          head -n 5 vps789-domains2ip >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
